@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
@@ -13,12 +12,13 @@ contract NFTDrop is ERC721, Ownable {
     uint256 public mintPrice = 0.05 ether;
     uint256 public totalMinted;
 
-    bytes32 public merkleRoot;              
+    bytes32 public merkleRoot;
     mapping(address => bool) public hasMinted;
 
     bool public revealed;
-    string public hiddenURI;              
-    string public baseURI;                 
+    string public hiddenURI;
+    string public baseURI;
+
     // ============ BORROWED: CONSTRUCTOR ============
     // ERC721's constructor sets name/symbol. Ownable's constructor sets the deployer as owner.
     constructor(
@@ -33,31 +33,33 @@ contract NFTDrop is ERC721, Ownable {
 
     // ============ CUSTOM LOGIC ============
 
-    /// @notice Mint one NFT if the caller is on the allowlist and pays the price.
+    /// @notice Mint one NFT if the caller is on the allowlist and pays the exact price.
     /// @param proof The Merkle proof showing msg.sender's leaf is part of the tree.
     function mint(bytes32[] calldata proof) external payable {
         require(totalMinted < MAX_SUPPLY, "sold out");
         require(!hasMinted[msg.sender], "already minted");
-        require(msg.value >= mintPrice, "insufficient payment");
+        require(msg.value == mintPrice, "wrong payment"); // fix 1: exact price, so nobody loses an overpayment
 
-      
-        bytes32 leaf = keccak256(abi.encodePacked(msg.sender));
+        // fix 2: double hash the leaf so a 64 byte internal node can never pass as a leaf
+        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(msg.sender))));
         require(MerkleProof.verify(proof, merkleRoot, leaf), "not on allowlist");
 
-        hasMinted[msg.sender] = true;
+        hasMinted[msg.sender] = true; // effects before the external call
         totalMinted++;
 
-  
-        _safeMint(msg.sender, totalMinted);
+        _safeMint(msg.sender, totalMinted); // _safeMint calls the receiver, so it comes last
     }
 
-    /// @notice Owner flips the reveal switch once mint is done.
+    /// @notice Owner flips the reveal switch once mint is done and the real metadata is uploaded.
     function reveal() external onlyOwner {
+        // setBaseURI is locked after this, so a reveal with no base URI would brick the metadata forever
+        require(bytes(baseURI).length > 0, "base URI not set");
         revealed = true;
     }
 
-    /// @notice Owner can update the base URI once the real metadata is uploaded.
+    /// @notice Owner can update the base URI until the collection is revealed.
     function setBaseURI(string calldata _baseURI) external onlyOwner {
+        require(!revealed, "already revealed"); // fix 3: metadata cannot change after reveal
         baseURI = _baseURI;
     }
 
@@ -66,7 +68,7 @@ contract NFTDrop is ERC721, Ownable {
         merkleRoot = _merkleRoot;
     }
 
-    /// @notice Returns metadata URI for a token — placeholder before reveal, real after.
+    /// @notice Returns metadata URI for a token - placeholder before reveal, real after.
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
         _requireOwned(tokenId); // reverts if token doesn't exist (OZ v5 helper)
 
@@ -83,7 +85,6 @@ contract NFTDrop is ERC721, Ownable {
         require(success, "withdraw failed");
     }
 
-   
     function _toString(uint256 value) internal pure returns (string memory) {
         if (value == 0) return "0";
         uint256 temp = value;
